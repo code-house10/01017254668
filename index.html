@@ -1273,31 +1273,31 @@
   width:100%;
   overflow:hidden;
   user-select:none;
-}
-.offer-marquee-track{
-  --marquee-duration:18s;
+}.offer-marquee-track{
   display:flex;
   align-items:center;
   width:max-content;
-  min-width:200%;
+  min-width:0;
   direction:ltr;
+  transform:translate3d(0,0,0);
   will-change:transform;
-  transform:translate3d(-50%,0,0);
-  animation:none;
+  backface-visibility:hidden;
 }
-body.marquee-loaded .offer-marquee-track{
-  animation:offersMoveLeftToRight var(--marquee-duration) linear 0s 1 both;
+.offer-marquee-track.is-running{
+  pointer-events:none;
 }
-.offer-marquee:hover .offer-marquee-track{
-  animation-play-state:running;
+.offer-marquee-track.is-finished{
+  transform:translate3d(calc(100vw + 30px),0,0);
 }
 .offer-marquee-group{
   flex:0 0 auto;
   display:flex;
+  flex-direction:row-reverse;
   align-items:center;
-  justify-content:space-around;
+  justify-content:flex-start;
   gap:24px;
-  min-width:50%;
+  width:max-content;
+  min-width:0;
   min-height:42px;
   padding-inline:26px;
   white-space:nowrap;
@@ -1332,9 +1332,7 @@ body.marquee-loaded .offer-marquee-track{
   filter:drop-shadow(0 0 5px rgba(255,138,61,.50));
   animation:offerSeparatorPulse 1.8s ease-in-out infinite;
 }
-@keyframes offersMoveLeftToRight{
-  from{transform:translate3d(-50%,0,0)}
-  to{transform:translate3d(0,0,0)}
+to{transform:translate3d(0,0,0)}
 }
 @keyframes offerSeparatorPulse{
   0%,100%{opacity:.55;transform:scale(.85) rotate(0deg)}
@@ -1345,7 +1343,6 @@ body.marquee-loaded .offer-marquee-track{
   .topbar .topbar-inner{min-height:39px}
   .topbar::before,
   .topbar::after{width:34px}
-  .offer-marquee-track{--marquee-duration:15s}
   .offer-marquee-group{
     min-height:39px;
     gap:17px;
@@ -1361,7 +1358,6 @@ body.marquee-loaded .offer-marquee-track{
 @media(max-width:560px){
   .topbar,
   .topbar .topbar-inner{min-height:37px}
-  .offer-marquee-track{--marquee-duration:13s}
   .offer-marquee-group{
     min-height:37px;
     gap:13px;
@@ -1372,9 +1368,6 @@ body.marquee-loaded .offer-marquee-track{
   .offer-separator{font-size:7px}
 }
 @media(prefers-reduced-motion:reduce){
-  body.marquee-loaded .offer-marquee-track{
-    animation:offersMoveLeftToRight var(--marquee-duration) linear .25s 1 both !important;
-  }
   .offer-separator{
     animation:offerSeparatorPulse 1.8s ease-in-out infinite !important;
   }
@@ -1388,17 +1381,6 @@ body.marquee-loaded .offer-marquee-track{
     <div class="offer-marquee">
       <div class="offer-marquee-track">
         <div class="offer-marquee-group"><span class="offer-item"><b>خصم 20%</b> على خدمة نقل العفش الكامل</span>
-<span class="offer-separator" aria-hidden="true">✦</span>
-<span class="offer-item"><b>خصم 15%</b> على التغليف الاحترافي</span>
-<span class="offer-separator" aria-hidden="true">✦</span>
-<span class="offer-item"><b>عرض خاص</b> على الونش الهيدروليكي للأدوار العالية</span>
-<span class="offer-separator" aria-hidden="true">✦</span>
-<span class="offer-item"><b>معاينة مجانية</b> داخل القاهرة والجيزة</span>
-<span class="offer-separator" aria-hidden="true">✦</span>
-<span class="offer-item"><b>خصم الشركات</b> على نقل المكاتب والأجهزة</span>
-<span class="offer-separator" aria-hidden="true">✦</span>
-<span class="offer-item"><b>باقة متكاملة</b> فك + تغليف + نقل + تركيب بسعر مميز</span></div>
-        <div class="offer-marquee-group" aria-hidden="true"><span class="offer-item"><b>خصم 20%</b> على خدمة نقل العفش الكامل</span>
 <span class="offer-separator" aria-hidden="true">✦</span>
 <span class="offer-item"><b>خصم 15%</b> على التغليف الاحترافي</span>
 <span class="offer-separator" aria-hidden="true">✦</span>
@@ -1846,9 +1828,90 @@ body.marquee-loaded .offer-marquee-track{
 </script>
 
 <script>
-  /* Start the one-time marquee immediately after the HTML is parsed.
-     It does not wait for slider or service images to finish loading. */
-  document.body.classList.add('marquee-loaded');
+  /*
+   * Reliable one-pass marquee:
+   * - starts immediately after layout is available;
+   * - begins at the left edge with no blank waiting time;
+   * - measures the real text width;
+   * - continues until the complete content leaves the right edge.
+   */
+  (() => {
+    const viewport = document.querySelector('.offer-marquee');
+    const track = document.querySelector('.offer-marquee-track');
+
+    if (!viewport || !track) return;
+
+    let animationFrame = 0;
+    let resizeTimer = 0;
+    let hasFinished = false;
+
+    const runMarqueeOnce = () => {
+      cancelAnimationFrame(animationFrame);
+      hasFinished = false;
+
+      track.classList.remove('is-finished');
+      track.classList.add('is-running');
+      track.style.transform = 'translate3d(0,0,0)';
+
+      const contentWidth = Math.ceil(track.scrollWidth);
+      const viewportWidth = Math.ceil(viewport.clientWidth);
+
+      /*
+       * The track's right edge starts 18px inside the left side,
+       * so the first offer is visible immediately.
+       */
+      const startX = -contentWidth + 18;
+      const endX = viewportWidth + 24;
+      const distance = endX - startX;
+
+      const screenWidth = window.innerWidth;
+      const pixelsPerSecond =
+        screenWidth <= 560 ? 118 :
+        screenWidth <= 820 ? 132 :
+        148;
+
+      const duration = Math.max(11000, Math.min(24000, (distance / pixelsPerSecond) * 1000));
+      const startTime = performance.now();
+
+      track.style.transform = `translate3d(${startX}px,0,0)`;
+
+      const move = now => {
+        const progress = Math.min((now - startTime) / duration, 1);
+        const currentX = startX + (distance * progress);
+
+        track.style.transform = `translate3d(${currentX}px,0,0)`;
+
+        if (progress < 1) {
+          animationFrame = requestAnimationFrame(move);
+        } else {
+          hasFinished = true;
+          track.classList.remove('is-running');
+          track.classList.add('is-finished');
+          track.style.transform = `translate3d(${endX}px,0,0)`;
+        }
+      };
+
+      animationFrame = requestAnimationFrame(move);
+    };
+
+    /*
+     * Two frames are enough for dimensions to be calculated and do not
+     * wait for slider, article, or service images.
+     */
+    requestAnimationFrame(() => {
+      requestAnimationFrame(runMarqueeOnce);
+    });
+
+    /*
+     * If the screen rotates or resizes while the text is still moving,
+     * recalculate the full journey so it cannot stop halfway.
+     */
+    window.addEventListener('resize', () => {
+      if (hasFinished) return;
+      clearTimeout(resizeTimer);
+      resizeTimer = window.setTimeout(runMarqueeOnce, 120);
+    }, { passive:true });
+  })();
 </script>
 
 </body>
